@@ -1,10 +1,7 @@
-// services/analytics.ts
-
 interface AnalyticsData {
-  dailyReaders: number;
-  monthlyReaders: number;
-  popularPosts: string[];
-  readerLocations: Record<string, number>;
+  dailyViews: Record<string, number>;
+  postViews: Record<number, number>;
+  lastUpdated: string;
 }
 
 class AnalyticsService {
@@ -41,33 +38,39 @@ class AnalyticsService {
     return analytics.dailyViews[today] || 0;
   }
   
-  // Get monthly average
+  // Get monthly average - FIXED TypeScript error
   getMonthlyAverage(): number {
     const analytics = this.getAnalytics();
     const dailyViews = Object.values(analytics.dailyViews);
     
     if (dailyViews.length === 0) return 0;
     
-    const sum = dailyViews.reduce((a, b) => a + b, 0);
+    // Fixed: Added proper types to reduce function
+    const sum = dailyViews.reduce((a: number, b: number) => a + b, 0);
     return Math.round(sum / Math.min(dailyViews.length, 30));
   }
   
-  // Get popular posts
+  // Get popular posts - FIXED TypeScript error
   getPopularPosts(limit: number = 5): Array<{id: number, views: number}> {
     const analytics = this.getAnalytics();
+    
+    // Convert object entries to array with proper types
     const posts = Object.entries(analytics.postViews)
-      .map(([id, views]) => ({ id: parseInt(id), views }))
+      .map(([id, views]) => ({ 
+        id: parseInt(id), 
+        views: views as number  // Type assertion
+      }))
       .sort((a, b) => b.views - a.views)
       .slice(0, limit);
     
     return posts;
   }
   
-  private getAnalytics() {
+  private getAnalytics(): AnalyticsData {
     if (typeof window === 'undefined') {
       return {
-        dailyViews: {} as Record<string, number>,
-        postViews: {} as Record<number, number>,
+        dailyViews: {},
+        postViews: {},
         lastUpdated: new Date().toISOString(),
       };
     }
@@ -78,13 +81,13 @@ class AnalyticsService {
     }
     
     return {
-      dailyViews: {} as Record<string, number>,
-      postViews: {} as Record<number, number>,
+      dailyViews: {},
+      postViews: {},
       lastUpdated: new Date().toISOString(),
     };
   }
   
-  private saveAnalytics(data: any) {
+  private saveAnalytics(data: AnalyticsData) {
     if (typeof window === 'undefined') return;
     
     data.lastUpdated = new Date().toISOString();

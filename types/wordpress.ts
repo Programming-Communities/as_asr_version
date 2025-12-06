@@ -54,3 +54,4 @@ export interface WPPageInfo {
   hasNextPage: boolean;
   endCursor?: string;
 }
+

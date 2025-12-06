@@ -38,7 +38,7 @@ export default function RootLayout({
           <div className="min-h-screen flex flex-col">
             <Header />
             
-            {/* Full width main content - NO sidebar */}
+            {/* Full width main content */}
             <main className="flex-1">
               {children}
             </main>

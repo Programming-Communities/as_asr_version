@@ -170,13 +170,24 @@ class WordPressService {
     content: string;
     parent?: number;
     metadata?: any;
-  }): Promise<boolean> {
+  }): Promise<{ success: boolean; comment?: WPComment; error?: string }> {
     try {
+      // Get user token if available
+      let headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      
+      // Try to get token from localStorage for authenticated users
+      if (typeof window !== 'undefined') {
+        const token = localStorage.getItem('token');
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`;
+        }
+      }
+      
       const response = await fetch(`${this.restBaseUrl}/wp/v2/comments`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers,
         body: JSON.stringify({
           post: data.postId,
           author_name: data.author_name,
@@ -186,15 +197,69 @@ class WordPressService {
         }),
       });
 
-      return response.ok;
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Comment submission failed:', errorText);
+        
+        // Parse error message if possible
+        let errorMessage = 'Comment submission failed';
+        try {
+          const errorJson = JSON.parse(errorText);
+          errorMessage = errorJson.message || errorText;
+        } catch {
+          errorMessage = errorText;
+        }
+        
+        return {
+          success: false,
+          error: errorMessage
+        };
+      }
+
+      const commentData = await response.json();
+      
+      // Transform to WPComment format
+      const comment: WPComment = {
+        id: commentData.id,
+        author_name: commentData.author_name,
+        author_email: commentData.author_email,
+        content: commentData.content.rendered,
+        date: commentData.date,
+        parent: commentData.parent,
+        status: commentData.status,
+        avatar: commentData.author_avatar_urls?.['96'],
+      };
+
+      // Clear cache for this post's comments
+      this.clearPostCommentsCache(data.postId);
+
+      return {
+        success: true,
+        comment
+      };
     } catch (error) {
       console.error('Error submitting comment:', error);
-      return false;
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error occurred'
+      };
     }
+  }
+
+  // Helper method to clear post comments cache
+  private clearPostCommentsCache(postId: number): void {
+    const cacheKeys = Array.from(this.cache.keys()).filter(key => 
+      key.startsWith(`comments_${postId}_`)
+    );
+    cacheKeys.forEach(key => this.cache.delete(key));
   }
 
   async getComments(postId: number, page: number = 1): Promise<WPComment[]> {
     try {
+      const cacheKey = `comments_${postId}_${page}`;
+      const cached = this.getFromCache<WPComment[]>(cacheKey);
+      if (cached) return cached;
+
       const response = await fetch(
         `${this.restBaseUrl}/wp/v2/comments?post=${postId}&page=${page}&per_page=50&order=asc`
       );
@@ -204,7 +269,7 @@ class WordPressService {
       }
 
       const comments: any[] = await response.json();
-      return comments.map(comment => ({
+      const transformedComments = comments.map(comment => ({
         id: comment.id,
         author_name: comment.author_name,
         author_email: comment.author_email,
@@ -214,6 +279,9 @@ class WordPressService {
         status: comment.status,
         avatar: comment.author_avatar_urls?.['96'],
       }));
+
+      this.setCache(cacheKey, transformedComments);
+      return transformedComments;
     } catch (error) {
       console.error('Error fetching comments:', error);
       return [];
@@ -243,6 +311,10 @@ class WordPressService {
 
   async getReactions(postId: number): Promise<Record<string, number>> {
     try {
+      const cacheKey = `reactions_${postId}`;
+      const cached = this.getFromCache<Record<string, number>>(cacheKey);
+      if (cached) return cached;
+
       const response = await fetch(
         `${this.restBaseUrl}/al-asr/v1/reactions/${postId}`
       );
@@ -251,7 +323,9 @@ class WordPressService {
         return {};
       }
 
-      return await response.json();
+      const reactions = await response.json();
+      this.setCache(cacheKey, reactions);
+      return reactions;
     } catch (error) {
       console.error('Error fetching reactions:', error);
       return {};
@@ -351,6 +425,10 @@ class WordPressService {
   // Get total post count from WordPress
   async getTotalPostCount(): Promise<number> {
     try {
+      const cacheKey = 'total_post_count';
+      const cached = this.getFromCache<number>(cacheKey);
+      if (cached) return cached;
+
       const response: any = await this.graphqlClient.request(`
         query GetPostCount {
           posts {
@@ -361,7 +439,9 @@ class WordPressService {
         }
       `);
 
-      return response.posts?.pageInfo?.total || 0;
+      const total = response.posts?.pageInfo?.total || 0;
+      this.setCache(cacheKey, total);
+      return total;
     } catch (error) {
       console.error('Error getting post count:', error);
       
@@ -378,6 +458,10 @@ class WordPressService {
   // Get unique authors count
   async getUniqueAuthorsCount(): Promise<number> {
     try {
+      const cacheKey = 'unique_authors_count';
+      const cached = this.getFromCache<number>(cacheKey);
+      if (cached) return cached;
+
       const response: any = await this.graphqlClient.request(`
         query GetUniqueAuthors {
           users {
@@ -391,7 +475,9 @@ class WordPressService {
         }
       `);
 
-      return response.users?.pageInfo?.total || 0;
+      const total = response.users?.pageInfo?.total || 0;
+      this.setCache(cacheKey, total);
+      return total;
     } catch (error) {
       console.error('Error getting authors count:', error);
       
@@ -409,6 +495,10 @@ class WordPressService {
   // Estimate daily readers based on recent posts
   async estimateDailyReaders(): Promise<number> {
     try {
+      const cacheKey = 'estimated_daily_readers';
+      const cached = this.getFromCache<number>(cacheKey);
+      if (cached) return cached;
+
       // Fetch recent posts from last 30 days
       const recentPosts = await this.fetchRecentPosts(30);
       
@@ -419,13 +509,15 @@ class WordPressService {
       estimatedReaders += recentPosts.length * 50;
       
       // Add readers based on categories (more diversity = more readers)
-      const uniqueCategories = new Set(recentPosts.flatMap(post => 
-        post.categories.map(cat => cat.id)
+      const uniqueCategories = new Set(recentPosts.flatMap((post: any) => 
+        post.categories?.map((cat: any) => cat.id) || []
       ));
       estimatedReaders += uniqueCategories.size * 25;
       
       // Ensure minimum of 1000 readers
-      return Math.max(1000, estimatedReaders);
+      const result = Math.max(1000, estimatedReaders);
+      this.setCache(cacheKey, result);
+      return result;
     } catch (error) {
       console.error('Error estimating daily readers:', error);
       return 1000; // Fallback minimum
@@ -435,6 +527,10 @@ class WordPressService {
   // Fetch recent posts from last N days
   async fetchRecentPosts(days: number = 30) {
     try {
+      const cacheKey = `recent_posts_${days}`;
+      const cached = this.getFromCache<any[]>(cacheKey);
+      if (cached) return cached;
+
       // Calculate date for "days ago"
       const date = new Date();
       date.setDate(date.getDate() - days);
@@ -460,7 +556,9 @@ class WordPressService {
         afterDate: dateString
       });
 
-      return response.posts?.nodes || [];
+      const posts = response.posts?.nodes || [];
+      this.setCache(cacheKey, posts);
+      return posts;
     } catch (error) {
       console.error('Error fetching recent posts:', error);
       return [];
@@ -482,9 +580,14 @@ class WordPressService {
   // Get popular posts based on recent activity
   async getPopularPosts(limit: number = 5): Promise<WPPost[]> {
     try {
+      const cacheKey = `popular_posts_${limit}`;
+      const cached = this.getFromCache<WPPost[]>(cacheKey);
+      if (cached) return cached;
+
       // This would ideally come from your analytics or WordPress stats plugin
       // For now, we'll return recent posts
       const { posts } = await this.fetchPosts({ first: limit });
+      this.setCache(cacheKey, posts);
       return posts;
     } catch (error) {
       console.error('Error fetching popular posts:', error);
@@ -529,6 +632,10 @@ class WordPressService {
     categoriesAdded: number;
   }> {
     try {
+      const cacheKey = `content_growth_${days}`;
+      const cached = this.getFromCache<any>(cacheKey);
+      if (cached) return cached;
+
       const date = new Date();
       date.setDate(date.getDate() - days);
       const dateString = date.toISOString().split('T')[0];
@@ -546,11 +653,14 @@ class WordPressService {
         afterDate: dateString
       });
 
-      return {
+      const result = {
         postsAdded: response.posts?.pageInfo?.total || 0,
         commentsAdded: response.comments?.pageInfo?.total || 0,
         categoriesAdded: 0, // WordPress doesn't track category creation dates easily
       };
+
+      this.setCache(cacheKey, result);
+      return result;
     } catch (error) {
       console.error('Error getting content growth:', error);
       return {
@@ -576,6 +686,10 @@ class WordPressService {
 
   // Get detailed statistics with all metrics
   async getDetailedStatistics() {
+    const cacheKey = 'detailed_statistics';
+    const cached = this.getFromCache<any>(cacheKey);
+    if (cached) return cached;
+
     const [basicStats, contentGrowth, siteHealth, popularPosts] = await Promise.all([
       this.getSiteStatistics(),
       this.getContentGrowth(30),
@@ -583,7 +697,7 @@ class WordPressService {
       this.getPopularPosts(5),
     ]);
 
-    return {
+    const result = {
       ...basicStats,
       contentGrowth,
       siteHealth,
@@ -591,6 +705,110 @@ class WordPressService {
       cacheStats: this.getCacheStats(),
       timestamp: new Date().toISOString(),
     };
+
+    this.setCache(cacheKey, result);
+    return result;
+  }
+
+  // Additional method for GraphQL comment submission (optional)
+  async submitCommentGraphQL(data: {
+    postId: number;
+    author_name: string;
+    author_email: string;
+    content: string;
+    parent?: number;
+  }): Promise<{ success: boolean; comment?: WPComment; error?: string }> {
+    try {
+      const mutation = `
+        mutation CreateComment(
+          $postId: Int!
+          $authorName: String!
+          $authorEmail: String!
+          $content: String!
+          $parent: Int
+        ) {
+          createComment(
+            input: {
+              commentOn: $postId
+              author: $authorName
+              authorEmail: $authorEmail
+              content: $content
+              parent: $parent
+            }
+          ) {
+            success
+            comment {
+              id
+              content
+              author {
+                node {
+                  name
+                  email
+                }
+              }
+            }
+          }
+        }
+      `;
+
+      const variables = {
+        postId: data.postId,
+        authorName: data.author_name,
+        authorEmail: data.author_email,
+        content: data.content,
+        parent: data.parent || null,
+      };
+
+      // Add auth headers if token exists
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+
+      if (typeof window !== 'undefined') {
+        const token = localStorage.getItem('token');
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`;
+        }
+      }
+
+      // Create a new client with auth headers for this request
+      const authClient = new GraphQLClient(`${wordpressConfig.url}${wordpressConfig.graphqlEndpoint}`, {
+        headers,
+        timeout: wordpressConfig.apiTimeout,
+      });
+
+      const response: any = await authClient.request(mutation, variables);
+      
+      if (response.createComment?.success) {
+        // Clear comments cache
+        this.clearPostCommentsCache(data.postId);
+        
+        return {
+          success: true,
+          comment: {
+            id: parseInt(response.createComment.comment.id),
+            author_name: data.author_name,
+            author_email: data.author_email,
+            content: data.content,
+            date: new Date().toISOString(),
+            parent: data.parent || 0,
+            status: 'approved',
+            avatar: '',
+          }
+        };
+      } else {
+        return {
+          success: false,
+          error: 'Comment submission failed via GraphQL'
+        };
+      }
+    } catch (error) {
+      console.error('Error submitting comment via GraphQL:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error occurred'
+      };
+    }
   }
 }
 

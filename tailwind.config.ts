@@ -24,7 +24,7 @@ const config: Config = {
         },
       },
       fontFamily: {
-        arabic: ['Jameel Noori Nastaleeq', 'serif'],
+        arabic: ['var(--font-arabic)', 'Jameel Noori Nastaleeq', 'serif'],
       },
       animation: {
         'slide-up': 'slideUp 0.3s ease-out',

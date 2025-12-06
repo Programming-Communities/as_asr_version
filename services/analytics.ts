@@ -1,123 +1,95 @@
-'use client';
+// services/analytics.ts
 
-import { storageService } from './storage';
-
-interface AnalyticsEvent {
-  category: string;
-  action: string;
-  label?: string;
-  value?: number;
+interface AnalyticsData {
+  dailyReaders: number;
+  monthlyReaders: number;
+  popularPosts: string[];
+  readerLocations: Record<string, number>;
 }
 
-interface PageView {
-  path: string;
-  title: string;
-  timestamp: number;
-}
-
-export class AnalyticsService {
-  private isEnabled(): boolean {
-    const preferences = storageService.getCookiePreferences();
-    return preferences?.analytics === true;
+class AnalyticsService {
+  private localStorageKey = 'site_analytics';
+  
+  // Track page view
+  trackPageView(postId?: number) {
+    if (typeof window === 'undefined') return;
+    
+    const today = new Date().toDateString();
+    const analytics = this.getAnalytics();
+    
+    // Update daily count
+    if (!analytics.dailyViews[today]) {
+      analytics.dailyViews[today] = 0;
+    }
+    analytics.dailyViews[today]++;
+    
+    // Track popular posts
+    if (postId) {
+      if (!analytics.postViews[postId]) {
+        analytics.postViews[postId] = 0;
+      }
+      analytics.postViews[postId]++;
+    }
+    
+    this.saveAnalytics(analytics);
   }
-
-  trackEvent(event: AnalyticsEvent): void {
-    if (!this.isEnabled() || !window.gtag) return;
-
-    window.gtag('event', event.action, {
-      event_category: event.category,
-      event_label: event.label,
-      value: event.value,
-    });
+  
+  // Get real daily readers
+  getDailyReaders(): number {
+    const analytics = this.getAnalytics();
+    const today = new Date().toDateString();
+    return analytics.dailyViews[today] || 0;
   }
-
-  trackPageView(pageView: PageView): void {
-    if (!this.isEnabled() || !window.gtag) return;
-
-    window.gtag('config', process.env.NEXT_PUBLIC_GOOGLE_ANALYTICS_ID || '', {
-      page_path: pageView.path,
-      page_title: pageView.title,
-    });
+  
+  // Get monthly average
+  getMonthlyAverage(): number {
+    const analytics = this.getAnalytics();
+    const dailyViews = Object.values(analytics.dailyViews);
+    
+    if (dailyViews.length === 0) return 0;
+    
+    const sum = dailyViews.reduce((a, b) => a + b, 0);
+    return Math.round(sum / Math.min(dailyViews.length, 30));
   }
-
-  trackReaction(postId: number, reaction: string): void {
-    this.trackEvent({
-      category: 'Reaction',
-      action: 'react',
-      label: `Post ${postId}`,
-      value: 1,
-    });
+  
+  // Get popular posts
+  getPopularPosts(limit: number = 5): Array<{id: number, views: number}> {
+    const analytics = this.getAnalytics();
+    const posts = Object.entries(analytics.postViews)
+      .map(([id, views]) => ({ id: parseInt(id), views }))
+      .sort((a, b) => b.views - a.views)
+      .slice(0, limit);
+    
+    return posts;
   }
-
-  trackComment(postId: number): void {
-    this.trackEvent({
-      category: 'Comment',
-      action: 'comment',
-      label: `Post ${postId}`,
-      value: 1,
-    });
+  
+  private getAnalytics() {
+    if (typeof window === 'undefined') {
+      return {
+        dailyViews: {} as Record<string, number>,
+        postViews: {} as Record<number, number>,
+        lastUpdated: new Date().toISOString(),
+      };
+    }
+    
+    const stored = localStorage.getItem(this.localStorageKey);
+    if (stored) {
+      return JSON.parse(stored);
+    }
+    
+    return {
+      dailyViews: {} as Record<string, number>,
+      postViews: {} as Record<number, number>,
+      lastUpdated: new Date().toISOString(),
+    };
   }
-
-  trackShare(platform: string, postId: number): void {
-    this.trackEvent({
-      category: 'Share',
-      action: 'share',
-      label: `${platform} - Post ${postId}`,
-      value: 1,
-    });
-  }
-
-  trackSearch(query: string): void {
-    this.trackEvent({
-      category: 'Search',
-      action: 'search',
-      label: query,
-      value: 1,
-    });
-  }
-
-  trackPerformance(metric: {
-    name: string;
-    value: number;
-    rating?: 'good' | 'needs-improvement' | 'poor';
-  }): void {
-    if (!this.isEnabled()) return;
-
-    this.trackEvent({
-      category: 'Performance',
-      action: metric.name,
-      label: metric.rating,
-      value: Math.round(metric.value),
-    });
-  }
-
-  trackScroll(depth: number): void {
-    if (!this.isEnabled()) return;
-
-    this.trackEvent({
-      category: 'Engagement',
-      action: 'scroll',
-      label: `Scroll Depth: ${depth}%`,
-      value: depth,
-    });
-  }
-
-  trackTimeOnPage(duration: number): void {
-    if (!this.isEnabled()) return;
-
-    this.trackEvent({
-      category: 'Engagement',
-      action: 'time_on_page',
-      label: `Duration: ${Math.round(duration / 1000)}s`,
-      value: duration,
-    });
+  
+  private saveAnalytics(data: any) {
+    if (typeof window === 'undefined') return;
+    
+    data.lastUpdated = new Date().toISOString();
+    localStorage.setItem(this.localStorageKey, JSON.stringify(data));
   }
 }
 
 export const analyticsService = new AnalyticsService();
-
-declare global {
-  interface Window {
-    gtag: (...args: any[]) => void;
-  }
-}

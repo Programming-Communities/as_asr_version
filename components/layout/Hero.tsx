@@ -221,7 +221,6 @@ export default function Hero({
             {/* Stats info */}
             {!stats.loading && (
               <div className="mt-4 text-xs text-white/60">
-                Statistics updated from WordPress
               </div>
             )}
           </div>

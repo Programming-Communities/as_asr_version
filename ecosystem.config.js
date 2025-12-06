@@ -1,0 +1,40 @@
+module.exports = {
+  apps: [{
+    name: 'al-asr-centers',
+    script: 'server.js',
+    instances: 'max',
+    exec_mode: 'cluster',
+    env: {
+      NODE_ENV: 'development',
+    },
+    env_production: {
+      NODE_ENV: 'production',
+      PORT: 3000,
+    },
+    env_staging: {
+      NODE_ENV: 'production',
+      PORT: 3001,
+    },
+    max_memory_restart: '1G',
+    min_uptime: '10s',
+    max_restarts: 10,
+    restart_delay: 4000,
+    kill_timeout: 5000,
+    listen_timeout: 10000,
+    shutdown_with_message: true,
+    source_map_support: true,
+    error_file: 'logs/err.log',
+    out_file: 'logs/out.log',
+    log_file: 'logs/combined.log',
+    log_date_format: 'YYYY-MM-DD HH:mm:ss',
+    merge_logs: true,
+    watch: false,
+    ignore_watch: [
+      'node_modules',
+      'logs',
+      '.git',
+      '.next',
+      'public',
+    ],
+  }],
+};
